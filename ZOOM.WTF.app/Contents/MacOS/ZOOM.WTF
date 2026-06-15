@@ -1,0 +1,114 @@
+#!/bin/bash
+set -euo pipefail
+
+APP_NAME="ZOOM.WTF"
+APP_BUNDLE="${APP_NAME}.app"
+TARGET_APP="/Applications/${APP_BUNDLE}"
+APP_ROOT="$(cd "$(dirname "$0")/../.." && pwd -P)"
+RESOURCE_DIR="${APP_ROOT}/Contents/Resources"
+MAIN_SCRIPT="${RESOURCE_DIR}/main_app.sh"
+LOG_DIR="$HOME/Library/Logs"
+LOG="${LOG_DIR}/${APP_NAME}_first_run_install.log"
+
+mkdir -p "$LOG_DIR"
+
+exec > >(tee -a "$LOG") 2>&1
+
+echo "========================================"
+echo "$APP_NAME first-run launcher"
+echo "Date: $(date)"
+echo "User: $(whoami)"
+echo "macOS: $(sw_vers -productVersion 2>/dev/null || echo unknown)"
+echo "Current app path: $APP_ROOT"
+echo "Target app path: $TARGET_APP"
+echo "Log: $LOG"
+echo "========================================"
+
+dialog_note() {
+  local message="$1"
+  /usr/bin/osascript -e "display dialog \"$message\" buttons {\"OK\"} default button \"OK\" with icon note" >/dev/null 2>&1 || true
+}
+
+dialog_error() {
+  local message="$1"
+  echo "ERROR: $message"
+  /usr/bin/osascript -e "display dialog \"$message\" buttons {\"OK\"} default button \"OK\" with icon stop" >/dev/null 2>&1 || true
+  exit 1
+}
+
+install_prompt() {
+  /usr/bin/osascript <<'APPLESCRIPT'
+try
+  set resultButton to button returned of (display dialog "ZOOM.WTF needs to install itself into Applications before opening.
+
+Click Install to continue." buttons {"Cancel", "Install"} default button "Install" with icon note)
+  return resultButton
+on error
+  return "Cancel"
+end try
+APPLESCRIPT
+}
+
+copy_with_admin() {
+  local source_path="$1"
+  local target_path="$2"
+
+  /usr/bin/osascript <<APPLESCRIPT
+set sourcePath to "$source_path"
+set targetPath to "$target_path"
+do shell script "/bin/rm -rf " & quoted form of targetPath & " && /usr/bin/ditto " & quoted form of sourcePath & " " & quoted form of targetPath with administrator privileges
+APPLESCRIPT
+}
+
+echo "Checking launch location..."
+
+if [ "$APP_ROOT" != "$TARGET_APP" ]; then
+  echo "App is not installed in Applications yet."
+
+  BUTTON="$(install_prompt)"
+
+  if [ "$BUTTON" != "Install" ]; then
+    echo "User cancelled install."
+    exit 0
+  fi
+
+  echo "Installing app to Applications..."
+
+  if /bin/rm -rf "$TARGET_APP" 2>/dev/null && /usr/bin/ditto "$APP_ROOT" "$TARGET_APP" 2>/dev/null; then
+    echo "Installed without admin prompt."
+  else
+    echo "Normal install failed. Trying admin install..."
+    copy_with_admin "$APP_ROOT" "$TARGET_APP" || dialog_error "ZOOM.WTF could not install itself into Applications."
+  fi
+
+  echo "Fixing installed app permissions..."
+  /bin/chmod -R u+rwX "$TARGET_APP" || true
+
+  if [ -d "$TARGET_APP/Contents/MacOS" ]; then
+    /usr/bin/find "$TARGET_APP/Contents/MacOS" -type f -exec /bin/chmod u+x {} \; || true
+  fi
+
+  echo "Relaunching installed app..."
+  /usr/bin/open "$TARGET_APP" || dialog_error "ZOOM.WTF installed, but could not reopen."
+
+  echo "Exiting temporary copy."
+  exit 0
+fi
+
+echo "App is already installed in Applications."
+echo "Starting main app..."
+
+if [ ! -f "$MAIN_SCRIPT" ]; then
+  dialog_error "Main app script is missing:
+
+$MAIN_SCRIPT"
+fi
+
+/bin/chmod u+x "$MAIN_SCRIPT" || true
+
+echo "Running main app script: $MAIN_SCRIPT"
+"$MAIN_SCRIPT"
+EXIT_CODE=$?
+
+echo "Main app exited with code: $EXIT_CODE"
+exit "$EXIT_CODE"

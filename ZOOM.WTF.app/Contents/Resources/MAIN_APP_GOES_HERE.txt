@@ -1,0 +1,1 @@
+Replace main_app.sh with your real Master/Guest GUI startup. Keep logging if possible.

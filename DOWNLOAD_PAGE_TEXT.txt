@@ -1,0 +1,9 @@
+Download ZOOM.WTF for Mac
+
+1. Download ZOOM.WTF-mac.zip
+2. Double-click the ZIP
+3. Double-click ZOOM.WTF.app
+4. Click Install
+5. ZOOM.WTF will reopen automatically
+
+If Mac asks whether you want to open it, choose Open.
