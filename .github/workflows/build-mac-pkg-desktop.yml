@@ -1,0 +1,155 @@
+name: Build ZOOM.WTF Mac PKG Installer
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Build receipt
+        run: |
+          echo "========================================"
+          echo "ZOOM.WTF Mac PKG installer build started"
+          echo "Date: $(date)"
+          echo "Runner: $(uname -a)"
+          echo "Working folder: $(pwd)"
+          echo "========================================"
+
+      - name: Verify app exists
+        run: |
+          if [ ! -d "ZOOM.WTF.app" ]; then
+            echo "ERROR: ZOOM.WTF.app is missing."
+            echo "Expected path: ./ZOOM.WTF.app"
+            exit 1
+          fi
+
+          if [ ! -d "ZOOM.WTF.app/Contents/MacOS" ]; then
+            echo "ERROR: ZOOM.WTF.app/Contents/MacOS is missing."
+            exit 1
+          fi
+
+          if [ ! -f "ZOOM.WTF.app/Contents/Info.plist" ]; then
+            echo "ERROR: ZOOM.WTF.app/Contents/Info.plist is missing."
+            exit 1
+          fi
+
+          echo "App bundle found."
+
+      - name: Fix app permissions
+        run: |
+          echo "Fixing app permissions..."
+          chmod -R u+rwX "ZOOM.WTF.app"
+          find "ZOOM.WTF.app/Contents/MacOS" -type f -exec chmod u+x {} \;
+
+          if [ -d "ZOOM.WTF.app/Contents/Resources" ]; then
+            find "ZOOM.WTF.app/Contents/Resources" -name "*.sh" -type f -exec chmod u+x {} \;
+          fi
+
+          echo "Permission receipt:"
+          ls -la "ZOOM.WTF.app/Contents/MacOS"
+
+      - name: Validate app bundle
+        run: |
+          echo "Checking Info.plist..."
+          plutil -lint "ZOOM.WTF.app/Contents/Info.plist"
+
+          EXEC_NAME=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "ZOOM.WTF.app/Contents/Info.plist")
+          echo "Executable from Info.plist: $EXEC_NAME"
+
+          if [ ! -f "ZOOM.WTF.app/Contents/MacOS/$EXEC_NAME" ]; then
+            echo "ERROR: Executable missing:"
+            echo "ZOOM.WTF.app/Contents/MacOS/$EXEC_NAME"
+            exit 1
+          fi
+
+      - name: Ad-hoc sign app
+        run: |
+          echo "Ad-hoc signing app..."
+          codesign --force --deep --sign - "ZOOM.WTF.app"
+          codesign --verify --deep --strict --verbose=2 "ZOOM.WTF.app"
+
+          echo "Gatekeeper assessment receipt:"
+          spctl --assess --type execute --verbose=4 "ZOOM.WTF.app" || true
+
+      - name: Create package payload
+        run: |
+          echo "Creating package payload..."
+          rm -rf pkgroot scripts
+          mkdir -p "pkgroot/Applications"
+          mkdir -p "scripts"
+
+          ditto "ZOOM.WTF.app" "pkgroot/Applications/ZOOM.WTF.app"
+
+          echo "Writing postinstall script to create Desktop shortcut..."
+          cat > "scripts/postinstall" <<'EOS'
+#!/bin/bash
+set -e
+
+APP="/Applications/ZOOM.WTF.app"
+APP_NAME="ZOOM.WTF.app"
+
+echo "ZOOM.WTF postinstall started"
+echo "Date: $(date)"
+
+CONSOLE_USER="$(/usr/bin/stat -f %Su /dev/console || true)"
+
+if [ -z "$CONSOLE_USER" ] || [ "$CONSOLE_USER" = "root" ] || [ "$CONSOLE_USER" = "loginwindow" ]; then
+  echo "No active desktop user found. Skipping Desktop shortcut."
+  exit 0
+fi
+
+USER_HOME="$(/usr/bin/dscl . -read "/Users/$CONSOLE_USER" NFSHomeDirectory 2>/dev/null | /usr/bin/awk '{print $2}')"
+
+if [ -z "$USER_HOME" ] || [ ! -d "$USER_HOME" ]; then
+  echo "Could not find home folder for $CONSOLE_USER. Skipping Desktop shortcut."
+  exit 0
+fi
+
+DESKTOP="$USER_HOME/Desktop"
+SHORTCUT="$DESKTOP/$APP_NAME"
+
+if [ ! -d "$DESKTOP" ]; then
+  echo "Desktop folder not found for $CONSOLE_USER. Skipping Desktop shortcut."
+  exit 0
+fi
+
+echo "Creating Desktop shortcut for $CONSOLE_USER..."
+/bin/rm -f "$SHORTCUT"
+/bin/ln -s "$APP" "$SHORTCUT"
+/usr/sbin/chown -h "$CONSOLE_USER":staff "$SHORTCUT" || true
+
+echo "Desktop shortcut created: $SHORTCUT"
+exit 0
+EOS
+
+          chmod +x "scripts/postinstall"
+
+      - name: Build PKG installer
+        run: |
+          echo "Building PKG installer..."
+          pkgbuild \
+            --root "pkgroot" \
+            --scripts "scripts" \
+            --identifier "wtf.zoom.installer" \
+            --version "1.0.0" \
+            --install-location "/" \
+            "ZOOM.WTF-Installer.pkg"
+
+          echo "Creating checksum..."
+          shasum -a 256 "ZOOM.WTF-Installer.pkg" > "ZOOM.WTF-Installer.pkg.sha256"
+
+          echo "PKG output:"
+          ls -lah "ZOOM.WTF-Installer.pkg" "ZOOM.WTF-Installer.pkg.sha256"
+
+      - name: Upload PKG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZOOM-WTF-Mac-PKG-Installer
+          path: |
+            ZOOM.WTF-Installer.pkg
+            ZOOM.WTF-Installer.pkg.sha256
