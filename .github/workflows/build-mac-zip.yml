@@ -1,0 +1,92 @@
+name: Build ZOOM.WTF Mac ZIP
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Build receipt
+        run: |
+          echo "========================================"
+          echo "ZOOM.WTF Mac ZIP build started"
+          echo "Date: $(date)"
+          echo "Runner: $(uname -a)"
+          echo "Working folder: $(pwd)"
+          echo "========================================"
+
+      - name: Verify app exists
+        run: |
+          if [ ! -d "ZOOM.WTF.app" ]; then
+            echo "ERROR: ZOOM.WTF.app is missing."
+            echo "Expected path: ./ZOOM.WTF.app"
+            exit 1
+          fi
+
+          if [ ! -d "ZOOM.WTF.app/Contents/MacOS" ]; then
+            echo "ERROR: ZOOM.WTF.app/Contents/MacOS is missing."
+            exit 1
+          fi
+
+          if [ ! -f "ZOOM.WTF.app/Contents/Info.plist" ]; then
+            echo "ERROR: Info.plist is missing."
+            exit 1
+          fi
+
+          echo "App bundle found."
+
+      - name: Fix Mac permissions
+        run: |
+          echo "Fixing app permissions..."
+          chmod -R u+rwX "ZOOM.WTF.app"
+
+          echo "Fixing executable launcher permissions..."
+          find "ZOOM.WTF.app/Contents/MacOS" -type f -exec chmod u+x {} \;
+
+          if [ -d "ZOOM.WTF.app/Contents/Resources" ]; then
+            find "ZOOM.WTF.app/Contents/Resources" -name "*.sh" -type f -exec chmod u+x {} \;
+          fi
+
+          echo "Permission receipt:"
+          ls -la "ZOOM.WTF.app/Contents/MacOS"
+
+      - name: Validate app bundle
+        run: |
+          echo "Checking Info.plist..."
+          plutil -lint "ZOOM.WTF.app/Contents/Info.plist"
+
+          echo "Reading app executable name..."
+          EXEC_NAME=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "ZOOM.WTF.app/Contents/Info.plist")
+          echo "Executable from Info.plist: $EXEC_NAME"
+
+          if [ ! -f "ZOOM.WTF.app/Contents/MacOS/$EXEC_NAME" ]; then
+            echo "ERROR: Executable does not exist:"
+            echo "ZOOM.WTF.app/Contents/MacOS/$EXEC_NAME"
+            exit 1
+          fi
+
+          echo "App bundle validation passed."
+
+      - name: Create Mac-safe ZIP
+        run: |
+          echo "Creating Mac-safe ZIP with ditto..."
+          ditto -c -k --keepParent "ZOOM.WTF.app" "ZOOM.WTF-mac.zip"
+
+          echo "Creating checksum..."
+          shasum -a 256 "ZOOM.WTF-mac.zip" > "ZOOM.WTF-mac.zip.sha256"
+
+          echo "Build output:"
+          ls -lah "ZOOM.WTF-mac.zip" "ZOOM.WTF-mac.zip.sha256"
+
+      - name: Upload ZIP artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZOOM-WTF-Mac-ZIP
+          path: |
+            ZOOM.WTF-mac.zip
+            ZOOM.WTF-mac.zip.sha256
